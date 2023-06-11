@@ -1,9 +1,22 @@
-use axum::{extract::Path, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+use std::sync::Arc;
+
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
 use serde_json::json;
 
-use crate::entities::{MealId, Table, TableId};
+use crate::{
+    entities::{MealId, Table, TableId},
+    storage::Storage,
+};
 
-pub(crate) fn app() -> Router {
+type StorageState = Arc<dyn Storage + Send + Sync>;
+
+pub(crate) fn app(state: StorageState) -> Router {
     Router::new()
         // TODO client UI
         .route(
@@ -13,9 +26,11 @@ pub(crate) fn app() -> Router {
                 .delete(delete_meal_from_table),
         )
         .route("/table/:table", get(get_all_meals_on_table))
+        .with_state(state)
 }
 
 async fn get_meal_on_table(
+    State(_storage): State<StorageState>,
     Path((table_id, meal_id)): Path<(TableId, MealId)>,
 ) -> impl IntoResponse {
     log::info!("get_meal_on_table({table_id}, {meal_id}");
@@ -30,12 +45,18 @@ async fn get_meal_on_table(
     )
 }
 
-async fn get_all_meals_on_table(Path(table_id): Path<TableId>) -> impl IntoResponse {
+async fn get_all_meals_on_table(
+    State(_storage): State<StorageState>,
+    Path(table_id): Path<TableId>,
+) -> impl IntoResponse {
     log::info!("get_all_meals_on_table({table_id})");
     (StatusCode::OK, Json(Table::new(table_id)))
 }
 
-async fn add_meal_to_table(Path((table, meal)): Path<(TableId, MealId)>) -> impl IntoResponse {
+async fn add_meal_to_table(
+    State(_storage): State<StorageState>,
+    Path((table, meal)): Path<(TableId, MealId)>,
+) -> impl IntoResponse {
     log::info!("Server add_meal_to_table({table}, {meal}");
 
     (
@@ -44,7 +65,10 @@ async fn add_meal_to_table(Path((table, meal)): Path<(TableId, MealId)>) -> impl
     )
 }
 
-async fn delete_meal_from_table(Path((table, meal)): Path<(TableId, MealId)>) -> impl IntoResponse {
+async fn delete_meal_from_table(
+    State(_storage): State<StorageState>,
+    Path((table, meal)): Path<(TableId, MealId)>,
+) -> impl IntoResponse {
     (
         StatusCode::OK,
         Json(json! ({"table": table, "meal": meal, "total": 0_u32})),
@@ -56,13 +80,13 @@ mod tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
-    use crate::entities::Table;
+    use crate::{entities::Table, storage::create_storage};
 
     use super::app;
 
     #[tokio::test]
     async fn test_get_all_meals_on_table() {
-        let app = app();
+        let app = app(create_storage().await.unwrap());
 
         let response = app
             .oneshot(

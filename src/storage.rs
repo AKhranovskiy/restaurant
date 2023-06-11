@@ -7,7 +7,7 @@ use sqlx::Row;
 use crate::entities::{Order, OrderId, TableId};
 
 #[async_trait]
-pub(crate) trait Storage: Clone {
+pub(crate) trait Storage {
     async fn add_order(&self, order: Order) -> anyhow::Result<OrderId>;
     async fn get_order(&self, order_id: OrderId) -> anyhow::Result<Option<Order>>;
     async fn delete_order(&self, order_id: OrderId) -> anyhow::Result<()>;
@@ -15,14 +15,15 @@ pub(crate) trait Storage: Clone {
 }
 
 #[allow(dead_code)]
-pub(crate) async fn create_storage() -> anyhow::Result<Box<impl Storage>> {
-    InMemorySQLiteStorage::create().await.map(Box::new)
+pub(crate) async fn create_storage() -> anyhow::Result<Arc<dyn Storage + Send + Sync>> {
+    let storage = InMemorySQLiteStorage::create().await?;
+    Ok(Arc::new(storage))
 }
 
 #[allow(dead_code)]
 #[derive(Clone)]
 struct InMemorySQLiteStorage {
-    pool: Arc<sqlx::SqlitePool>,
+    pool: sqlx::SqlitePool,
 }
 
 impl InMemorySQLiteStorage {
@@ -38,15 +39,14 @@ impl InMemorySQLiteStorage {
                 ready_at NUMERIC NOT NULL, \
                 deleted_at NUMERIC \
             ); \
-            CREATE INDEX IF NOT EXISTS table_id_idx ON orders(table_id); \
-            CREATE INDEX IF NOT EXISTS table_id_meal_id_idx ON orders(table_id, meal_id);",
+            CREATE INDEX IF NOT EXISTS order_id_idx ON orders(id, deleted_at); \
+            CREATE INDEX IF NOT EXISTS table_id_idx ON orders(table_id, deleted_at);
+            ",
         )
         .execute(&mut conn)
         .await?;
 
-        Ok(Self {
-            pool: Arc::new(pool),
-        })
+        Ok(Self { pool })
     }
 
     async fn create() -> anyhow::Result<Self> {
@@ -116,17 +116,7 @@ impl Storage for InMemorySQLiteStorage {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-
-    impl From<sqlx::SqlitePool> for InMemorySQLiteStorage {
-        fn from(pool: sqlx::SqlitePool) -> Self {
-            Self {
-                pool: Arc::new(pool),
-            }
-        }
-    }
 
     #[sqlx::test]
     async fn test_add_order(pool: sqlx::SqlitePool) -> sqlx::Result<()> {

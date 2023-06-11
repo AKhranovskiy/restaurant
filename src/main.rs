@@ -1,3 +1,5 @@
+use storage::create_storage;
+
 mod app;
 mod entities;
 mod meals_catalog;
@@ -8,7 +10,7 @@ async fn main() -> anyhow::Result<()> {
     init_logger()?;
 
     axum::Server::bind(&"0.0.0.0:9000".parse().unwrap())
-        .serve(app::app().into_make_service())
+        .serve(app::app(create_storage().await?).into_make_service())
         .await
         .unwrap();
 

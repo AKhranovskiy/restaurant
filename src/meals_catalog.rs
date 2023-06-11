@@ -3,6 +3,7 @@ use lazy_static::lazy_static;
 
 use crate::entities::MealId;
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub(crate) struct MealInfo {
     pub(crate) id: MealId,
