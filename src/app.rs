@@ -10,8 +10,8 @@ use axum::{
 use serde_json::json;
 
 use crate::{
-    entities::{MealId, Order, OrderId, TableId},
     meals_catalog::MEALS,
+    order::{MealId, Order, OrderId, TableId},
     storage::Storage,
 };
 
@@ -31,7 +31,7 @@ async fn put_order(
 ) -> impl IntoResponse {
     log::info!("Server put_order({table_id}, {meal_id}");
 
-    if let Some(meal) = MEALS.get_meal(meal_id) {
+    if let Some(meal) = MEALS.get(meal_id) {
         match storage.add_order(Order::new(table_id, meal)).await {
             Ok(order) => (StatusCode::OK, Json(json!({ "order": order }))),
             Err(error) => (
@@ -103,7 +103,7 @@ mod tests {
     use tower::{Service, ServiceExt};
 
     use crate::{
-        entities::{MealId, Order, TableId},
+        order::{MealId, Order, TableId},
         storage::create_storage,
     };
 

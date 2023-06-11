@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::async_trait;
 use chrono::Utc;
 
-use crate::entities::{Order, OrderId, TableId};
+use crate::order::{Order, OrderId, TableId};
 
 #[async_trait]
 pub(crate) trait Storage {
@@ -13,13 +13,11 @@ pub(crate) trait Storage {
     async fn get_orders_for_table(&self, table_id: TableId) -> anyhow::Result<Vec<Order>>;
 }
 
-#[allow(dead_code)]
 pub(crate) async fn create_storage() -> anyhow::Result<Arc<dyn Storage + Send + Sync>> {
     let storage = InMemorySQLiteStorage::create().await?;
     Ok(Arc::new(storage))
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
 struct InMemorySQLiteStorage {
     pool: sqlx::SqlitePool,
@@ -122,7 +120,7 @@ mod tests {
     async fn test_add_order(pool: sqlx::SqlitePool) -> sqlx::Result<()> {
         let storage = InMemorySQLiteStorage::init(pool).await.unwrap();
 
-        let meal = MEALS.get_meal(3).unwrap();
+        let meal = MEALS.get(3).unwrap();
 
         let order_id = storage.add_order(Order::new(2, meal)).await.unwrap().id;
         let order_id_2 = storage.add_order(Order::new(2, meal)).await.unwrap().id;
@@ -140,7 +138,7 @@ mod tests {
 
         assert!(storage.get_order(1).await.unwrap().is_none());
 
-        let meal = MEALS.get_meal(3).unwrap();
+        let meal = MEALS.get(3).unwrap();
         let order_id = storage.add_order(Order::new(2, meal)).await.unwrap().id;
         let order = storage.get_order(order_id).await.unwrap().unwrap();
 
@@ -156,7 +154,7 @@ mod tests {
         // Delete non-existing order.
         storage.delete_order(1).await.unwrap();
 
-        let meal = MEALS.get_meal(3).unwrap();
+        let meal = MEALS.get(3).unwrap();
         let order_id = storage.add_order(Order::new(2, meal)).await.unwrap().id;
         storage.delete_order(order_id).await.unwrap();
 
@@ -172,19 +170,19 @@ mod tests {
         assert!(storage.get_orders_for_table(1).await.unwrap().is_empty());
 
         storage
-            .add_order(Order::new(1, MEALS.get_meal(3).unwrap()))
+            .add_order(Order::new(1, MEALS.get(3).unwrap()))
             .await
             .unwrap();
         storage
-            .add_order(Order::new(1, MEALS.get_meal(3).unwrap()))
+            .add_order(Order::new(1, MEALS.get(3).unwrap()))
             .await
             .unwrap();
         storage
-            .add_order(Order::new(1, MEALS.get_meal(4).unwrap()))
+            .add_order(Order::new(1, MEALS.get(4).unwrap()))
             .await
             .unwrap();
         storage
-            .add_order(Order::new(2, MEALS.get_meal(3).unwrap()))
+            .add_order(Order::new(2, MEALS.get(3).unwrap()))
             .await
             .unwrap();
 

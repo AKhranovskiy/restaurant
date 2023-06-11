@@ -1,8 +1,8 @@
 use storage::create_storage;
 
 mod app;
-mod entities;
 mod meals_catalog;
+mod order;
 mod storage;
 
 #[tokio::main]
