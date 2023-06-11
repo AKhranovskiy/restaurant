@@ -6,6 +6,7 @@ mod meals_catalog;
 mod storage;
 
 pub async fn run_service() -> anyhow::Result<()> {
+    log::info!("Starting service at 0.0.0.0:9000");
     axum::Server::bind(&"0.0.0.0:9000".parse().unwrap())
         .serve(app::app(create_storage().await?).into_make_service())
         .await
