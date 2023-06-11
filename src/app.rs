@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, put},
     Json, Router,
 };
@@ -29,7 +29,7 @@ async fn put_order(
     State(storage): State<StorageState>,
     Path((table_id, meal_id)): Path<(TableId, MealId)>,
 ) -> impl IntoResponse {
-    log::info!("Server put_order({table_id}, {meal_id}");
+    log::info!("Server::put_order({table_id}, {meal_id})");
 
     if let Some(meal) = MEALS.get(meal_id) {
         match storage.add_order(Order::new(table_id, meal)).await {
@@ -51,7 +51,7 @@ async fn get_order(
     State(storage): State<StorageState>,
     Path(order_id): Path<OrderId>,
 ) -> impl IntoResponse {
-    log::info!("get_order({order_id}");
+    log::info!("Server::get_order({order_id})");
 
     match storage.get_order(order_id).await {
         Ok(Some(order)) => (StatusCode::OK, Json(json!({ "order": order }))),
@@ -70,6 +70,7 @@ async fn get_orders_for_table(
     State(storage): State<StorageState>,
     Path(table_id): Path<TableId>,
 ) -> impl IntoResponse {
+    log::info!("Server::get_orders_for_table({table_id})");
     match storage.get_orders_for_table(table_id).await {
         Ok(orders) => (StatusCode::OK, Json(json!({ "orders": orders }))),
         Err(error) => (
@@ -82,17 +83,20 @@ async fn get_orders_for_table(
 async fn delete_order(
     State(storage): State<StorageState>,
     Path(order_id): Path<OrderId>,
-) -> impl IntoResponse {
+) -> Response {
+    log::info!("Server::delete_order({order_id})");
     match storage.delete_order(order_id).await {
-        Ok(true) => (StatusCode::OK, Json(json!({}))),
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "Order not found"})),
-        ),
+        )
+            .into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": "Storage failure", "details": error.to_string()})),
-        ),
+        )
+            .into_response(),
     }
 }
 

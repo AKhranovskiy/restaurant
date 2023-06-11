@@ -5,10 +5,7 @@ mod meals_catalog;
 mod order;
 mod storage;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    init_logger()?;
-
+pub async fn run_service() -> anyhow::Result<()> {
     axum::Server::bind(&"0.0.0.0:9000".parse().unwrap())
         .serve(app::app(create_storage().await?).into_make_service())
         .await
@@ -17,10 +14,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn init_logger() -> anyhow::Result<()> {
+pub fn init_logger() -> anyhow::Result<()> {
     simplelog::TermLogger::init(
         log::LevelFilter::Debug,
-        simplelog::Config::default(),
+        simplelog::ConfigBuilder::new()
+            .add_filter_allow_str("restaurant")
+            .build(),
         simplelog::TerminalMode::Mixed,
         simplelog::ColorChoice::Auto,
     )
