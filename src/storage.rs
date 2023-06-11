@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
 use axum::async_trait;
+use chrono::Utc;
+use sqlx::Row;
 
-use crate::entities::{Meal, MealId, Table, TableId};
+use crate::entities::{Order, OrderId, TableId};
 
 #[async_trait]
 pub(crate) trait Storage: Clone {
-    async fn add_meal(&self, table_id: TableId, meal_id: MealId) -> anyhow::Result<Table>;
-    async fn get_meal(&self, table_id: TableId, meal_id: MealId) -> anyhow::Result<Vec<Meal>>;
-    async fn get_table(&self, table_id: TableId) -> anyhow::Result<Table>;
-    async fn delete_meal(&self, table_id: TableId, meal_id: MealId) -> anyhow::Result<Table>;
+    async fn add_order(&self, order: Order) -> anyhow::Result<OrderId>;
+    async fn get_order(&self, order_id: OrderId) -> anyhow::Result<Option<Order>>;
+    async fn delete_order(&self, order_id: OrderId) -> anyhow::Result<()>;
+    async fn get_orders_for_table(&self, table_id: TableId) -> anyhow::Result<Vec<Order>>;
 }
 
 #[allow(dead_code)]
@@ -34,7 +36,7 @@ impl InMemorySQLiteStorage {
                 meal_id INTEGER NOT NULL, \
                 added_at NUMERIC NOT NULL, \
                 ready_at NUMERIC NOT NULL, \
-                completed_at NUMERIC \
+                deleted_at NUMERIC \
             ); \
             CREATE INDEX IF NOT EXISTS table_id_idx ON orders(table_id); \
             CREATE INDEX IF NOT EXISTS table_id_meal_id_idx ON orders(table_id, meal_id);",
@@ -55,49 +57,60 @@ impl InMemorySQLiteStorage {
 
 #[async_trait]
 impl Storage for InMemorySQLiteStorage {
-    async fn add_meal(&self, table_id: TableId, meal_id: MealId) -> anyhow::Result<Table> {
-        log::debug!("Storage::add_meal({table_id}, {meal_id})");
-
-        let meal = Meal::new(meal_id);
+    async fn add_order(&self, order: Order) -> anyhow::Result<OrderId> {
+        log::debug!("Storage::add_order(order:?)");
 
         let mut conn = self.pool.acquire().await?;
 
         sqlx::query(
-            "INSERT INTO orders (table_id, meal_id, added_at, ready_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO orders (table_id, meal_id, added_at, ready_at) VALUES (?, ?, ?, ?) RETURNING id",
         )
-        .bind(table_id)
-        .bind(meal_id)
-        .bind(meal.added_at)
-        .bind(meal.ready_at)
-        .execute(&mut conn)
-        .await?;
-
-        self.get_table(table_id).await
+        .bind(order.table_id)
+        .bind(order.meal_id)
+        .bind(order.added_at)
+        .bind(order.ready_at)
+        .fetch_one(&mut conn)
+        .await
+        .map_err(Into::into)
+        .map(|row| row.get::<u32, _>("id"))
     }
 
-    async fn get_meal(&self, table_id: TableId, meal_id: MealId) -> anyhow::Result<Vec<Meal>> {
-        log::debug!("Storage::get_meal({table_id}, {meal_id})");
-        todo!()
-    }
-
-    async fn delete_meal(&self, table_id: TableId, meal_id: MealId) -> anyhow::Result<Table> {
-        log::debug!("Storage::delete_meal({table_id}, {meal_id})");
-        todo!()
-    }
-
-    async fn get_table(&self, table_id: TableId) -> anyhow::Result<Table> {
-        log::debug!("Storage::get_table({table_id})");
+    async fn get_order(&self, order_id: OrderId) -> anyhow::Result<Option<Order>> {
+        log::debug!("Storage::get_order({order_id})");
 
         let mut conn = self.pool.acquire().await?;
 
-        let meals = sqlx::query_as::<_, Meal>(
-            "SELECT * FROM orders WHERE table_id = ? AND completed_at IS NULL",
-        )
-        .bind(table_id)
-        .fetch_all(&mut conn)
-        .await?;
+        sqlx::query_as::<_, Order>("SELECT * FROM orders where id = ? and deleted_at IS NULL")
+            .bind(order_id)
+            .fetch_optional(&mut conn)
+            .await
+            .map_err(Into::into)
+    }
 
-        Ok(Table::new(table_id).add_meals(meals))
+    async fn delete_order(&self, order_id: OrderId) -> anyhow::Result<()> {
+        log::debug!("Storage::delete_order({order_id})");
+
+        let mut conn = self.pool.acquire().await?;
+
+        sqlx::query("UPDATE orders SET deleted_at = ? WHERE id = ?")
+            .bind(Utc::now())
+            .bind(order_id)
+            .execute(&mut conn)
+            .await
+            .map_err(Into::into)
+            .map(|_| ())
+    }
+
+    async fn get_orders_for_table(&self, table_id: TableId) -> anyhow::Result<Vec<Order>> {
+        log::debug!("Storage::get_orders_for_table({table_id})");
+
+        let mut conn = self.pool.acquire().await?;
+
+        sqlx::query_as::<_, Order>("SELECT * FROM orders WHERE table_id = ? AND deleted_at IS NULL")
+            .bind(table_id)
+            .fetch_all(&mut conn)
+            .await
+            .map_err(Into::into)
     }
 }
 
@@ -116,27 +129,41 @@ mod tests {
     }
 
     #[sqlx::test]
-    async fn test_add_same_meals(pool: sqlx::SqlitePool) -> sqlx::Result<()> {
+    async fn test_add_order(pool: sqlx::SqlitePool) -> sqlx::Result<()> {
         let storage = InMemorySQLiteStorage::init(pool).await.unwrap();
 
-        let table = storage.add_meal(2, 3).await.unwrap();
-        assert_eq!(table, Table::new(2).add_meal(Meal::new(3)));
-
-        let table_2 = storage.add_meal(2, 3).await.unwrap();
-        assert_eq!(table_2, table.add_meal(Meal::new(3)));
+        let order_id = storage.add_order(Order::new(2, 3)).await.unwrap();
+        let order_id_2 = storage.add_order(Order::new(2, 3)).await.unwrap();
+        let order_id_3 = storage.add_order(Order::new(1, 3)).await.unwrap();
+        assert_ne!(order_id, order_id_2);
+        assert_ne!(order_id_2, order_id_3);
 
         Ok(())
     }
 
     #[sqlx::test]
-    async fn test_add_different_meals(pool: sqlx::SqlitePool) -> sqlx::Result<()> {
+    async fn test_get_order(pool: sqlx::SqlitePool) -> sqlx::Result<()> {
         let storage = InMemorySQLiteStorage::init(pool).await.unwrap();
 
-        let table = storage.add_meal(2, 3).await.unwrap();
-        assert_eq!(table, Table::new(2).add_meal(Meal::new(3)));
+        assert!(storage.get_order(1).await.unwrap().is_none());
 
-        let table_2 = storage.add_meal(2, 5).await.unwrap();
-        assert_eq!(table_2, table.add_meal(Meal::new(5)));
+        let order_id = storage.add_order(Order::new(2, 3)).await.unwrap();
+        let order = storage.get_order(order_id).await.unwrap().unwrap();
+        assert_eq!(order, Order::new(2, 3));
+
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn test_delete_order(pool: sqlx::SqlitePool) -> sqlx::Result<()> {
+        let storage = InMemorySQLiteStorage::init(pool).await.unwrap();
+
+        // Delete non-existing order.
+        storage.delete_order(1).await.unwrap();
+
+        let order_id = storage.add_order(Order::new(2, 3)).await.unwrap();
+        storage.delete_order(order_id).await.unwrap();
+        assert!(storage.get_order(order_id).await.unwrap().is_none());
 
         Ok(())
     }

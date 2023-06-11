@@ -1,7 +1,7 @@
 use axum::{extract::Path, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
 use serde_json::json;
 
-use crate::entities::{Meal, MealId, Table, TableId};
+use crate::entities::{MealId, Table, TableId};
 
 pub(crate) fn app() -> Router {
     Router::new()
@@ -20,11 +20,13 @@ async fn get_meal_on_table(
 ) -> impl IntoResponse {
     log::info!("get_meal_on_table({table_id}, {meal_id}");
 
-    let meal = Meal::new(meal_id);
+    // let meal = MEALS
+    //     .get_meal(meal_id)
+    //     .ok_or(anyhow::anyhow!("Invalid meal"))?;
 
     (
         StatusCode::OK,
-        Json(json! ({"table": table_id, "meal": meal, "count": 1_u32})),
+        Json(json! ({"table": table_id, "meal_d": meal_id, "count": 1_u32})),
     )
 }
 

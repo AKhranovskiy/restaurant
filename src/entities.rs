@@ -4,13 +4,14 @@ use serde::{Deserialize, Serialize};
 use crate::meals_catalog::MEALS;
 
 pub(crate) type TableId = u32;
+pub(crate) type OrderId = u32;
 pub(crate) type MealId = u32;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct Table {
     pub(crate) table_id: TableId,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    meals: Vec<Meal>,
+    orders: Vec<Order>,
 }
 
 #[allow(dead_code)]
@@ -18,61 +19,71 @@ impl Table {
     pub(crate) fn new(id: TableId) -> Self {
         Self {
             table_id: id,
-            meals: vec![],
+            orders: vec![],
         }
     }
 
-    pub(crate) fn add_meal(self, meal: Meal) -> Self {
+    pub(crate) fn add_order(self, order: Order) -> Self {
         let mut s = self;
-        s.meals.push(meal);
+        s.orders.push(order);
         s
     }
 
-    pub(crate) fn add_meals(self, mut meals: Vec<Meal>) -> Self {
+    pub(crate) fn add_orders(self, mut orders: Vec<Order>) -> Self {
         let mut s = self;
-        s.meals.append(&mut meals);
+        s.orders.append(&mut orders);
         s
     }
 
-    pub(crate) fn get_meal(&self, meal_id: MealId) -> Vec<Meal> {
-        self.meals
+    pub(crate) fn get_order(&self, order_id: OrderId) -> Option<Order> {
+        self.orders
             .iter()
-            .filter(|m| m.meal_id == meal_id)
+            .find(|order| order.id == order_id)
+            .cloned()
+    }
+
+    pub(crate) fn get_meal_orders(&self, meal_id: MealId) -> Vec<Order> {
+        self.orders
+            .iter()
+            .filter(|order| order.meal_id == meal_id)
             .cloned()
             .collect()
+    }
+
+    pub(crate) fn delete_order(self, order_id: OrderId) -> Self {
+        let mut s = self;
+        s.orders.retain(|order| order.id != order_id);
+        s
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Eq, Clone, sqlx::FromRow)]
-pub(crate) struct Meal {
+pub(crate) struct Order {
+    pub(crate) id: OrderId,
+    pub(crate) table_id: TableId,
     pub(crate) meal_id: MealId,
     pub(crate) added_at: DateTime<Utc>,
     pub(crate) ready_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub(crate) completed_at: Option<DateTime<Utc>>,
 }
 
 #[allow(dead_code)]
-impl Meal {
-    pub(crate) fn new(id: MealId) -> Self {
-        let meal = MEALS.get_meal(id).unwrap();
+impl Order {
+    pub(crate) fn new(table_id: TableId, meal_id: MealId) -> Self {
+        let meal = MEALS.get_meal(meal_id).unwrap();
         let now = Utc::now();
         Self {
-            meal_id: id,
+            id: OrderId::MAX,
+            table_id,
+            meal_id,
             added_at: now,
             ready_at: now + meal.cooking_time,
-            completed_at: None,
         }
-    }
-
-    pub(crate) fn name(&self) -> &'static str {
-        MEALS.get_meal(self.meal_id).unwrap().name
     }
 }
 
-impl PartialEq for Meal {
+impl PartialEq for Order {
     fn eq(&self, other: &Self) -> bool {
-        self.meal_id == other.meal_id
+        self.table_id == other.table_id && self.meal_id == other.meal_id
     }
 }
 
@@ -80,15 +91,16 @@ impl PartialEq for Meal {
 mod tests {
     use crate::meals_catalog::MEALS;
 
-    use super::Meal;
+    use super::*;
 
     #[test]
-    fn test_new_meal() {
-        let sut = Meal::new(1);
-        let meal = MEALS.get_meal(1).unwrap();
+    fn test_new_order() {
+        const MEAL_ID: MealId = 2;
+        let order = Order::new(1, MEAL_ID);
+        let meal = MEALS.get_meal(MEAL_ID).unwrap();
 
-        assert_eq!(1, sut.meal_id);
-        assert_eq!(meal.name, sut.name());
-        assert_eq!(meal.cooking_time, sut.ready_at - sut.added_at);
+        assert_eq!(1, order.table_id);
+        assert_eq!(2, order.meal_id);
+        assert_eq!(meal.cooking_time, order.ready_at - order.added_at);
     }
 }
