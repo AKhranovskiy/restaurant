@@ -1,21 +1,23 @@
 use chrono::Duration;
 use lazy_static::lazy_static;
+use serde::{Deserialize, Serialize};
 
-use crate::order::MealId;
+use crate::api::MealId;
 
-#[derive(Clone, Debug)]
-pub(crate) struct MealInfo {
-    pub(crate) id: MealId,
-    #[allow(dead_code)]
-    pub(crate) name: &'static str,
-    pub(crate) cooking_time: Duration,
+#[serde_with::serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MealInfo {
+    pub id: MealId,
+    pub name: String,
+    #[serde_as(as = "serde_with::DurationSeconds<i64>")]
+    pub cooking_time: Duration,
 }
 
 impl From<(MealId, &'static str, Duration)> for MealInfo {
     fn from((id, name, cooking_time): (MealId, &'static str, Duration)) -> Self {
         Self {
             id,
-            name,
+            name: name.to_string(),
             cooking_time,
         }
     }
@@ -34,6 +36,10 @@ impl MealCatalog {
 
     pub(crate) fn get(&self, meal_id: MealId) -> Option<&MealInfo> {
         self.meals.iter().find(|m| m.id == meal_id)
+    }
+
+    pub(crate) fn get_all(&self) -> &[MealInfo] {
+        self.meals.as_slice()
     }
 }
 

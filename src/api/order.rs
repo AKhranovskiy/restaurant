@@ -3,17 +3,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::meals_catalog::MealInfo;
 
-pub(crate) type TableId = u32;
-pub(crate) type OrderId = u32;
-pub(crate) type MealId = u32;
+pub type TableId = u32;
+pub type OrderId = u32;
+pub type MealId = u32;
 
 #[derive(Debug, Serialize, Deserialize, Eq, Clone, sqlx::FromRow)]
-pub(crate) struct Order {
-    pub(crate) id: OrderId,
-    pub(crate) table_id: TableId,
-    pub(crate) meal_id: MealId,
-    pub(crate) added_at: DateTime<Utc>,
-    pub(crate) ready_at: DateTime<Utc>,
+pub struct Order {
+    pub id: OrderId,
+    pub table_id: TableId,
+    pub meal_id: MealId,
+    pub added_at: DateTime<Utc>,
+    pub ready_at: DateTime<Utc>,
 }
 
 impl Order {

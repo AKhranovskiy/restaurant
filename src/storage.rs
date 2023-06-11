@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::async_trait;
 use chrono::Utc;
 
-use crate::order::{Order, OrderId, TableId};
+use crate::api::{Order, OrderId, TableId};
 
 #[async_trait]
 pub(crate) trait Storage {

@@ -1,8 +1,8 @@
 use storage::create_storage;
 
+pub mod api;
 mod app;
 mod meals_catalog;
-mod order;
 mod storage;
 
 pub async fn run_service() -> anyhow::Result<()> {
@@ -16,9 +16,10 @@ pub async fn run_service() -> anyhow::Result<()> {
 
 pub fn init_logger() -> anyhow::Result<()> {
     simplelog::TermLogger::init(
-        log::LevelFilter::Debug,
+        log::LevelFilter::Info,
         simplelog::ConfigBuilder::new()
             .add_filter_allow_str("restaurant")
+            .add_filter_allow_str("clients")
             .build(),
         simplelog::TerminalMode::Mixed,
         simplelog::ColorChoice::Auto,

@@ -10,8 +10,8 @@ use axum::{
 use serde_json::json;
 
 use crate::{
+    api::{GetOrderResponse, GetOrdersResponse, MealId, Order, OrderId, PutOrderResponse, TableId},
     meals_catalog::MEALS,
-    order::{MealId, Order, OrderId, TableId},
     storage::Storage,
 };
 
@@ -22,6 +22,7 @@ pub(crate) fn app(state: StorageState) -> Router {
         .route("/table/:table/meal/:meal", put(put_order))
         .route("/order/:order", get(get_order).delete(delete_order))
         .route("/table/:table/orders", get(get_orders_for_table))
+        .route("/meals", get(get_meals))
         .with_state(state)
 }
 
@@ -33,10 +34,10 @@ async fn put_order(
 
     if let Some(meal) = MEALS.get(meal_id) {
         match storage.add_order(Order::new(table_id, meal)).await {
-            Ok(order) => (StatusCode::OK, Json(json!({ "order": order }))),
+            Ok(order) => (StatusCode::OK, Json(json!(PutOrderResponse { order }))),
             Err(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Storage failure", "details": error.to_string()})),
+                Json(json!({ "error": format!("Storage failure: {error:#}") })),
             ),
         }
     } else {
@@ -54,14 +55,14 @@ async fn get_order(
     log::info!("Server::get_order({order_id})");
 
     match storage.get_order(order_id).await {
-        Ok(Some(order)) => (StatusCode::OK, Json(json!({ "order": order }))),
+        Ok(Some(order)) => (StatusCode::OK, Json(json!(GetOrderResponse { order }))),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "Order not found"})),
         ),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Storage failure", "details": error.to_string()})),
+            Json(json!({ "error": format!("Storage failure: {error:#}") })),
         ),
     }
 }
@@ -72,7 +73,7 @@ async fn get_orders_for_table(
 ) -> impl IntoResponse {
     log::info!("Server::get_orders_for_table({table_id})");
     match storage.get_orders_for_table(table_id).await {
-        Ok(orders) => (StatusCode::OK, Json(json!({ "orders": orders }))),
+        Ok(orders) => (StatusCode::OK, Json(json!(GetOrdersResponse { orders }))),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("Storage failure: {error:#}") })),
@@ -94,20 +95,24 @@ async fn delete_order(
             .into_response(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "Storage failure", "details": error.to_string()})),
+            Json(json!({ "error": format!("Storage failure: {error:#}") })),
         )
             .into_response(),
     }
 }
 
+async fn get_meals() -> impl IntoResponse {
+    log::info!("Server::get_meals()");
+    (StatusCode::OK, Json(json!(MEALS.get_all())))
+}
+
 #[cfg(test)]
 mod tests {
     use axum::{body::Body, http::Request, Router};
-    use serde::Deserialize;
     use tower::{Service, ServiceExt};
 
     use crate::{
-        order::{MealId, Order, TableId},
+        api::{GetOrderResponse, GetOrdersResponse, MealId, Order, PutOrderResponse, TableId},
         storage::create_storage,
     };
 
@@ -131,12 +136,6 @@ mod tests {
         assert!(response.status().is_success());
 
         let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-
-        #[derive(Deserialize)]
-        struct PutOrderResponse {
-            order: Order,
-        }
-
         let order: &Order = &serde_json::from_slice::<PutOrderResponse>(&body)
             .unwrap()
             .order;
@@ -183,10 +182,6 @@ mod tests {
 
         assert!(response.status().is_success());
 
-        #[derive(Deserialize)]
-        struct GetOrderResponse {
-            order: Order,
-        }
         let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
         let order = &serde_json::from_slice::<GetOrderResponse>(&body)
             .unwrap()
@@ -281,11 +276,6 @@ mod tests {
             .unwrap();
 
         assert!(response.status().is_success());
-
-        #[derive(Deserialize)]
-        struct GetOrdersResponse {
-            orders: Vec<Order>,
-        }
 
         let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
         let orders = serde_json::from_slice::<GetOrdersResponse>(&body)
