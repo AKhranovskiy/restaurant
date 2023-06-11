@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::meals_catalog::MEALS;
+use crate::meals_catalog::MealInfo;
 
 pub(crate) type TableId = u32;
 pub(crate) type OrderId = u32;
@@ -68,13 +68,12 @@ pub(crate) struct Order {
 
 #[allow(dead_code)]
 impl Order {
-    pub(crate) fn new(table_id: TableId, meal_id: MealId) -> Self {
-        let meal = MEALS.get_meal(meal_id).unwrap();
+    pub(crate) fn new(table_id: TableId, meal: &MealInfo) -> Self {
         let now = Utc::now();
         Self {
             id: OrderId::MAX,
             table_id,
-            meal_id,
+            meal_id: meal.id,
             added_at: now,
             ready_at: now + meal.cooking_time,
         }
@@ -95,9 +94,8 @@ mod tests {
 
     #[test]
     fn test_new_order() {
-        const MEAL_ID: MealId = 2;
-        let order = Order::new(1, MEAL_ID);
-        let meal = MEALS.get_meal(MEAL_ID).unwrap();
+        let meal = MEALS.get_meal(2).unwrap();
+        let order = Order::new(1, meal);
 
         assert_eq!(1, order.table_id);
         assert_eq!(2, order.meal_id);
