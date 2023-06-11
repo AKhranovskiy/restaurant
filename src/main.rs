@@ -1,5 +1,6 @@
 mod app;
 mod entities;
+mod meals_catalog;
 mod storage;
 
 #[tokio::main]

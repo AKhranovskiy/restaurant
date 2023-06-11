@@ -1,5 +1,4 @@
 use axum::{extract::Path, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
-use chrono::{Duration, Utc};
 use serde_json::json;
 
 use crate::entities::{Meal, MealId, Table, TableId};
@@ -21,13 +20,7 @@ async fn get_meal_on_table(
 ) -> impl IntoResponse {
     log::info!("get_meal_on_table({table_id}, {meal_id}");
 
-    let meal = Meal {
-        id: meal_id,
-        name: "Meal".to_string(),
-        created_at: Utc::now() - Duration::minutes(1),
-        ready_at: None,
-        completed_at: None,
-    };
+    let meal = Meal::new(meal_id);
 
     (
         StatusCode::OK,
@@ -35,15 +28,9 @@ async fn get_meal_on_table(
     )
 }
 
-async fn get_all_meals_on_table(Path(table): Path<TableId>) -> impl IntoResponse {
-    log::info!("get_all_meals_on_table({table})");
-    (
-        StatusCode::OK,
-        Json(Table {
-            id: table,
-            meals: vec![],
-        }),
-    )
+async fn get_all_meals_on_table(Path(table_id): Path<TableId>) -> impl IntoResponse {
+    log::info!("get_all_meals_on_table({table_id})");
+    (StatusCode::OK, Json(Table::new(table_id)))
 }
 
 async fn add_meal_to_table(Path((table, meal)): Path<(TableId, MealId)>) -> impl IntoResponse {
@@ -89,12 +76,6 @@ mod tests {
 
         let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
         let table: Table = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            table,
-            Table {
-                id: 1,
-                meals: vec![]
-            }
-        );
+        assert_eq!(table, Table::new(1));
     }
 }
