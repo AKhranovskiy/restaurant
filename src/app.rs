@@ -4,13 +4,13 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, put},
     Json, Router,
 };
 use serde_json::json;
 
 use crate::{
-    entities::{MealId, Order, TableId},
+    entities::{MealId, Order, OrderId, TableId},
     meals_catalog::MEALS,
     storage::Storage,
 };
@@ -19,27 +19,21 @@ type StorageState = Arc<dyn Storage + Send + Sync>;
 
 pub(crate) fn app(state: StorageState) -> Router {
     Router::new()
-        // TODO client UI
-        .route(
-            "/table/:table/meal/:meal",
-            get(get_meal_on_table)
-                .put(add_meal_to_table)
-                .delete(delete_meal_from_table),
-        )
-        .route("/table/:table", get(get_all_meals_on_table))
+        .route("/table/:table/meal/:meal", put(put_order))
+        .route("/order/:order", get(get_order).delete(delete_order))
+        .route("/table/:table/orders", get(get_orders_for_table))
         .with_state(state)
 }
 
-async fn add_meal_to_table(
+async fn put_order(
     State(storage): State<StorageState>,
     Path((table_id, meal_id)): Path<(TableId, MealId)>,
 ) -> impl IntoResponse {
-    log::info!("Server add_meal_to_table({table_id}, {meal_id}");
+    log::info!("Server put_order({table_id}, {meal_id}");
 
     if let Some(meal) = MEALS.get_meal(meal_id) {
-        let order = Order::new(table_id, meal);
-        match storage.add_order(order).await {
-            Ok(order_id) => (StatusCode::OK, Json(json!({ "order": order_id }))),
+        match storage.add_order(Order::new(table_id, meal)).await {
+            Ok(order) => (StatusCode::OK, Json(json!({ "order": order }))),
             Err(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": "Storage failure", "details": error.to_string()})),
@@ -53,34 +47,18 @@ async fn add_meal_to_table(
     }
 }
 
-async fn get_meal_on_table(
+async fn get_order(
     State(storage): State<StorageState>,
-    Path((table_id, meal_id)): Path<(TableId, MealId)>,
+    Path(order_id): Path<OrderId>,
 ) -> impl IntoResponse {
-    log::info!("get_meal_on_table({table_id}, {meal_id}");
+    log::info!("get_order({order_id}");
 
-    if MEALS.get_meal(meal_id).is_some() {
-        match storage.get_meal_orders_for_table(table_id, meal_id).await {
-            Ok(orders) => (StatusCode::OK, Json(json!({ "orders": orders }))),
-            Err(error) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": "Storage failure", "details": error.to_string()})),
-            ),
-        }
-    } else {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json! ({"error": "Invalid meal"})),
-        )
-    }
-}
-
-async fn get_all_meals_on_table(
-    State(storage): State<StorageState>,
-    Path(table_id): Path<TableId>,
-) -> impl IntoResponse {
-    match storage.get_orders_for_table(table_id).await {
-        Ok(orders) => (StatusCode::OK, Json(json!({ "orders": orders }))),
+    match storage.get_order(order_id).await {
+        Ok(Some(order)) => (StatusCode::OK, Json(json!({ "order": order }))),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Order not found"})),
+        ),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": "Storage failure", "details": error.to_string()})),
@@ -88,31 +66,51 @@ async fn get_all_meals_on_table(
     }
 }
 
-async fn delete_meal_from_table(
-    State(_storage): State<StorageState>,
-    Path((table, meal)): Path<(TableId, MealId)>,
+async fn get_orders_for_table(
+    State(storage): State<StorageState>,
+    Path(table_id): Path<TableId>,
 ) -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(json! ({"table": table, "meal": meal, "total": 0_u32})),
-    )
+    match storage.get_orders_for_table(table_id).await {
+        Ok(orders) => (StatusCode::OK, Json(json!({ "orders": orders }))),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Storage failure: {error:#}") })),
+        ),
+    }
+}
+
+async fn delete_order(
+    State(storage): State<StorageState>,
+    Path(order_id): Path<OrderId>,
+) -> impl IntoResponse {
+    match storage.delete_order(order_id).await {
+        Ok(true) => (StatusCode::OK, Json(json!({}))),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Order not found"})),
+        ),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "Storage failure", "details": error.to_string()})),
+        ),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use axum::{body::Body, http::Request, Router};
-    use serde_json::Value;
+    use serde::Deserialize;
     use tower::{Service, ServiceExt};
 
     use crate::{
-        entities::{MealId, TableId},
+        entities::{MealId, Order, TableId},
         storage::create_storage,
     };
 
     use super::app;
 
     #[tokio::test]
-    async fn test_add_meal_to_table() {
+    async fn test_put_order() {
         let app = app(create_storage().await.unwrap());
 
         let response = app
@@ -129,12 +127,22 @@ mod tests {
         assert!(response.status().is_success());
 
         let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-        let value: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(1, value.get("order").unwrap().as_u64().unwrap());
+
+        #[derive(Deserialize)]
+        struct PutOrderResponse {
+            order: Order,
+        }
+
+        let order: &Order = &serde_json::from_slice::<PutOrderResponse>(&body)
+            .unwrap()
+            .order;
+        assert_eq!(1, order.id);
+        assert_eq!(1, order.table_id);
+        assert_eq!(3, order.meal_id);
     }
 
     #[tokio::test]
-    async fn test_add_invalid_meal_to_table() {
+    async fn test_put_invalid_order() {
         let app = app(create_storage().await.unwrap());
 
         let response = app
@@ -152,21 +160,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_meal_orders() {
+    async fn test_get_order() {
         let mut app = app(create_storage().await.unwrap());
 
-        add_meal(&mut app, 1, 1).await;
-        add_meal(&mut app, 1, 1).await;
-        add_meal(&mut app, 1, 2).await;
-        add_meal(&mut app, 1, 2).await;
-        add_meal(&mut app, 2, 1).await;
-        add_meal(&mut app, 2, 2).await;
+        put_order(&mut app, 1, 1).await;
+        put_order(&mut app, 2, 2).await;
 
         let response = app
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri("/table/1/meal/2")
+                    .uri("/order/2")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -175,33 +179,97 @@ mod tests {
 
         assert!(response.status().is_success());
 
+        #[derive(Deserialize)]
+        struct GetOrderResponse {
+            order: Order,
+        }
         let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-        let body = serde_json::from_slice::<Value>(&body).unwrap();
-        let orders = body.get("orders").unwrap().as_array().unwrap();
-        assert_eq!(2, orders.len());
-        assert!(orders.iter().all(|order| {
-            order.get("table_id").unwrap().as_u64().unwrap() == 1
-                && order.get("meal_id").unwrap().as_u64().unwrap() == 2
-        }));
+        let order = &serde_json::from_slice::<GetOrderResponse>(&body)
+            .unwrap()
+            .order;
+        assert_eq!(2, order.id);
     }
 
     #[tokio::test]
-    async fn test_get_all_meals_on_table() {
+    async fn test_delete_order() {
         let mut app = app(create_storage().await.unwrap());
 
-        add_meal(&mut app, 1, 1).await;
-        add_meal(&mut app, 1, 1).await;
-        add_meal(&mut app, 1, 2).await;
-        add_meal(&mut app, 1, 2).await;
-        add_meal(&mut app, 1, 3).await;
-        add_meal(&mut app, 2, 1).await;
-        add_meal(&mut app, 2, 2).await;
-        add_meal(&mut app, 2, 3).await;
+        put_order(&mut app, 1, 1).await;
+        put_order(&mut app, 2, 2).await;
 
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/table/1")
+                    .method("DELETE")
+                    .uri("/order/2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(response.status().is_success());
+    }
+
+    #[tokio::test]
+    async fn test_delete_nonexisting_order() {
+        let mut app = app(create_storage().await.unwrap());
+
+        put_order(&mut app, 1, 1).await;
+        put_order(&mut app, 2, 2).await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/order/3")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(response.status().is_client_error());
+    }
+
+    #[tokio::test]
+    async fn test_get_invalid_order() {
+        let mut app = app(create_storage().await.unwrap());
+
+        put_order(&mut app, 1, 1).await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/order/2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert!(response.status().is_client_error());
+    }
+
+    #[tokio::test]
+    async fn test_get_orders_for_table() {
+        let mut app = app(create_storage().await.unwrap());
+
+        put_order(&mut app, 1, 1).await;
+        put_order(&mut app, 1, 1).await;
+        put_order(&mut app, 1, 2).await;
+        put_order(&mut app, 1, 2).await;
+        put_order(&mut app, 1, 3).await;
+        put_order(&mut app, 2, 1).await;
+        put_order(&mut app, 2, 2).await;
+        put_order(&mut app, 2, 3).await;
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/table/1/orders")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -210,31 +278,36 @@ mod tests {
 
         assert!(response.status().is_success());
 
+        #[derive(Deserialize)]
+        struct GetOrdersResponse {
+            orders: Vec<Order>,
+        }
+
         let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
-        let body = serde_json::from_slice::<Value>(&body).unwrap();
-        let orders = body.get("orders").unwrap().as_array().unwrap();
+        let orders = serde_json::from_slice::<GetOrdersResponse>(&body)
+            .unwrap()
+            .orders;
 
         assert_eq!(5, orders.len());
-        assert!(orders
-            .iter()
-            .all(|order| { order.get("table_id").unwrap().as_u64().unwrap() == 1 }));
+        assert!(orders.iter().all(|order| { order.table_id == 1 }));
 
         assert_eq!(
-            [1_u64, 1, 2, 2, 3],
+            [1, 1, 2, 2, 3],
             orders
                 .iter()
-                .map(|order| order.get("meal_id").unwrap().as_u64().unwrap())
-                .collect::<Vec<u64>>()
+                .map(|order| order.meal_id)
+                .collect::<Vec<_>>()
                 .as_slice()
         );
     }
 
-    async fn add_meal(app: &mut Router, table_id: TableId, meal_id: MealId) {
+    async fn put_order(app: &mut Router, table_id: TableId, meal_id: MealId) {
         let request = Request::builder()
             .method("PUT")
             .uri(format!("/table/{table_id}/meal/{meal_id}"))
             .body(Body::empty())
             .unwrap();
+
         ServiceExt::<Request<Body>>::ready(app)
             .await
             .unwrap()

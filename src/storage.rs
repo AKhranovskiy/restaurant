@@ -2,23 +2,15 @@ use std::sync::Arc;
 
 use axum::async_trait;
 use chrono::Utc;
-use sqlx::Row;
 
-use crate::entities::{MealId, Order, OrderId, TableId};
+use crate::entities::{Order, OrderId, TableId};
 
 #[async_trait]
 pub(crate) trait Storage {
-    async fn add_order(&self, order: Order) -> anyhow::Result<OrderId>;
+    async fn add_order(&self, order: Order) -> anyhow::Result<Order>;
     async fn get_order(&self, order_id: OrderId) -> anyhow::Result<Option<Order>>;
-    async fn delete_order(&self, order_id: OrderId) -> anyhow::Result<()>;
-
+    async fn delete_order(&self, order_id: OrderId) -> anyhow::Result<bool>;
     async fn get_orders_for_table(&self, table_id: TableId) -> anyhow::Result<Vec<Order>>;
-
-    async fn get_meal_orders_for_table(
-        &self,
-        table_id: TableId,
-        meal_id: MealId,
-    ) -> anyhow::Result<Vec<Order>>;
 }
 
 #[allow(dead_code)]
@@ -47,7 +39,7 @@ impl InMemorySQLiteStorage {
                 deleted_at NUMERIC \
             ); \
             CREATE INDEX IF NOT EXISTS order_id_idx ON orders(id, deleted_at); \
-            CREATE INDEX IF NOT EXISTS table_id_idx ON orders(table_id, meal_id, deleted_at);
+            CREATE INDEX IF NOT EXISTS table_id_idx ON orders(table_id, deleted_at);
             ",
         )
         .execute(&mut conn)
@@ -64,13 +56,13 @@ impl InMemorySQLiteStorage {
 
 #[async_trait]
 impl Storage for InMemorySQLiteStorage {
-    async fn add_order(&self, order: Order) -> anyhow::Result<OrderId> {
+    async fn add_order(&self, order: Order) -> anyhow::Result<Order> {
         log::debug!("Storage::add_order(order:?)");
 
         let mut conn = self.pool.acquire().await?;
 
-        sqlx::query(
-            "INSERT INTO orders (table_id, meal_id, added_at, ready_at) VALUES (?, ?, ?, ?) RETURNING id",
+        sqlx::query_as::<_, Order>(
+            "INSERT INTO orders (table_id, meal_id, added_at, ready_at) VALUES (?, ?, ?, ?) RETURNING *",
         )
         .bind(order.table_id)
         .bind(order.meal_id)
@@ -79,7 +71,6 @@ impl Storage for InMemorySQLiteStorage {
         .fetch_one(&mut conn)
         .await
         .map_err(Into::into)
-        .map(|row| row.get::<u32, _>("id"))
     }
 
     async fn get_order(&self, order_id: OrderId) -> anyhow::Result<Option<Order>> {
@@ -94,7 +85,7 @@ impl Storage for InMemorySQLiteStorage {
             .map_err(Into::into)
     }
 
-    async fn delete_order(&self, order_id: OrderId) -> anyhow::Result<()> {
+    async fn delete_order(&self, order_id: OrderId) -> anyhow::Result<bool> {
         log::debug!("Storage::delete_order({order_id})");
 
         let mut conn = self.pool.acquire().await?;
@@ -105,7 +96,7 @@ impl Storage for InMemorySQLiteStorage {
             .execute(&mut conn)
             .await
             .map_err(Into::into)
-            .map(|_| ())
+            .map(|result| result.rows_affected() == 1)
     }
 
     async fn get_orders_for_table(&self, table_id: TableId) -> anyhow::Result<Vec<Order>> {
@@ -118,25 +109,6 @@ impl Storage for InMemorySQLiteStorage {
             .fetch_all(&mut conn)
             .await
             .map_err(Into::into)
-    }
-
-    async fn get_meal_orders_for_table(
-        &self,
-        table_id: TableId,
-        meal_id: MealId,
-    ) -> anyhow::Result<Vec<Order>> {
-        log::debug!("Storage::get_meal_orders_for_table({table_id})");
-
-        let mut conn = self.pool.acquire().await?;
-
-        sqlx::query_as::<_, Order>(
-            "SELECT * FROM orders WHERE table_id = ? AND meal_id = ? AND deleted_at IS NULL",
-        )
-        .bind(table_id)
-        .bind(meal_id)
-        .fetch_all(&mut conn)
-        .await
-        .map_err(Into::into)
     }
 }
 
@@ -152,9 +124,9 @@ mod tests {
 
         let meal = MEALS.get_meal(3).unwrap();
 
-        let order_id = storage.add_order(Order::new(2, meal)).await.unwrap();
-        let order_id_2 = storage.add_order(Order::new(2, meal)).await.unwrap();
-        let order_id_3 = storage.add_order(Order::new(1, meal)).await.unwrap();
+        let order_id = storage.add_order(Order::new(2, meal)).await.unwrap().id;
+        let order_id_2 = storage.add_order(Order::new(2, meal)).await.unwrap().id;
+        let order_id_3 = storage.add_order(Order::new(1, meal)).await.unwrap().id;
 
         assert_ne!(order_id, order_id_2);
         assert_ne!(order_id_2, order_id_3);
@@ -169,7 +141,7 @@ mod tests {
         assert!(storage.get_order(1).await.unwrap().is_none());
 
         let meal = MEALS.get_meal(3).unwrap();
-        let order_id = storage.add_order(Order::new(2, meal)).await.unwrap();
+        let order_id = storage.add_order(Order::new(2, meal)).await.unwrap().id;
         let order = storage.get_order(order_id).await.unwrap().unwrap();
 
         assert_eq!(order, Order::new(2, meal));
@@ -185,7 +157,7 @@ mod tests {
         storage.delete_order(1).await.unwrap();
 
         let meal = MEALS.get_meal(3).unwrap();
-        let order_id = storage.add_order(Order::new(2, meal)).await.unwrap();
+        let order_id = storage.add_order(Order::new(2, meal)).await.unwrap().id;
         storage.delete_order(order_id).await.unwrap();
 
         assert!(storage.get_order(order_id).await.unwrap().is_none());
@@ -219,48 +191,6 @@ mod tests {
         let orders = storage.get_orders_for_table(1).await.unwrap();
         assert_eq!(3, orders.len());
         assert!(orders.iter().all(|order| order.table_id == 1));
-
-        Ok(())
-    }
-
-    #[sqlx::test]
-    async fn test_get_meal_orders_for_table(pool: sqlx::SqlitePool) -> sqlx::Result<()> {
-        let storage = InMemorySQLiteStorage::init(pool).await.unwrap();
-
-        assert!(storage
-            .get_meal_orders_for_table(1, 3)
-            .await
-            .unwrap()
-            .is_empty());
-
-        storage
-            .add_order(Order::new(1, MEALS.get_meal(3).unwrap()))
-            .await
-            .unwrap();
-        storage
-            .add_order(Order::new(1, MEALS.get_meal(3).unwrap()))
-            .await
-            .unwrap();
-        storage
-            .add_order(Order::new(1, MEALS.get_meal(4).unwrap()))
-            .await
-            .unwrap();
-        storage
-            .add_order(Order::new(2, MEALS.get_meal(3).unwrap()))
-            .await
-            .unwrap();
-
-        let orders = storage.get_meal_orders_for_table(1, 3).await.unwrap();
-        assert_eq!(2, orders.len());
-        assert!(orders
-            .iter()
-            .all(|order| order.table_id == 1 && order.meal_id == 3));
-
-        let orders = storage.get_meal_orders_for_table(1, 4).await.unwrap();
-        assert_eq!(1, orders.len());
-        assert!(orders
-            .iter()
-            .all(|order| order.table_id == 1 && order.meal_id == 4));
 
         Ok(())
     }
